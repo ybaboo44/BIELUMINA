@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /commander
+Disallow: /confirmation
+Disallow: /suivi-commande
