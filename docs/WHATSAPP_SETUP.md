@@ -33,7 +33,7 @@ requête non signée est rejetée (403).
 
 ## 5. Traitement de la file
 Le cron appelle toutes les minutes :
-curl -X POST https://<ref>.supabase.co/functions/v1/whatsapp-send   -H "x-cron-secret: $CRON_SECRET" -d '{"action":"process-due"}'
+curl -X POST https://<ref>.supabase.co/functions/v1/whatsapp-notifications   -H "x-cron-secret: $CRON_SECRET" -d '{"action":"process-due"}'
 Backoff exponentiel plafonné, 5 tentatives max, idempotence par
 notifications.idempotency_key (une transition = une notification).
 

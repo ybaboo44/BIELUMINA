@@ -15,7 +15,7 @@ Boutique premium en français, HTG/USD, sans collecte de paiement en ligne. Le s
 
 ```bash
 npm install
-cp .env.example .env
+Copy-Item .env.example .env
 # Renseigner l’URL et la clé publiable Supabase
 npm run dev
 npm run test
@@ -26,7 +26,7 @@ Ne jamais placer de clé `service_role`, de secret e-mail ou de secret WhatsApp 
 
 ## Base Supabase
 
-Le projet configuré dans cette version s’appelle **BIELUMINA**. Les migrations ont déjà été appliquées et le catalogue initial est présent. Pour reconstruire un autre environnement, appliquer les migrations dans leur ordre chronologique avec Supabase CLI ou l’outil SQL du tableau de bord.
+Le dépôt contient les migrations du projet BIELUMINA. Avant de déployer, vérifier dans le projet Supabase cible l’état des migrations et des données initiales ; ne pas réinitialiser une base existante ni supposer que les migrations ont été appliquées. Voir [DEPLOY.md](./DEPLOY.md) pour la procédure de mise en production.
 
 Tables principales : produits, variantes, catégories, mouvements de stock, zones de livraison, commandes, lignes, historiques, notifications, rôles/permissions, invitations et audit. RLS est activé sur toutes les tables. Les opérations sensibles utilisent des fonctions serveur avec `search_path` fixé.
 
@@ -56,11 +56,7 @@ L’état livré ne prétend aucun envoi automatique : les identifiants fourniss
 
 ## Déploiement Vercel
 
-1. Importer le dépôt dans Vercel (framework Vite, build `npm run build`, sortie `dist`).
-2. Ajouter `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY` dans les variables d’environnement.
-3. `vercel.json` contient la réécriture SPA et des en-têtes de sécurité de base.
-4. Ajouter le domaine final dans Supabase Auth → URL configuration.
-5. Vérifier les politiques CORS/CSP du fournisseur de notifications avant activation.
+Suivre [DEPLOY.md](./DEPLOY.md) pour importer le dépôt, configurer `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY`, déployer et autoriser le domaine Vercel dans Supabase Auth. Le déploiement nécessite ces variables ; aucune configuration de production n’est incluse dans le dépôt.
 
 ## Sauvegarde et restauration
 
