@@ -44,7 +44,6 @@ export function Header() {
   const closeMenu = () => setMenuOpen(false);
 
   return <>
-    <div className="announcement">Livraison partout en Haïti <span>•</span> Commandez en HTG ou USD <span>•</span> Aucun paiement en ligne</div>
     <header className="site-header">
       <Link to="/" className="brand" aria-label="BIELUMINA — Accueil">
         <img src="/images/logo-cercle.png" alt="" />

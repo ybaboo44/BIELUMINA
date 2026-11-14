@@ -6,9 +6,9 @@ Boutique premium en français, HTG/USD, sans collecte de paiement en ligne. Le s
 
 - Accueil, catalogue, recherche, filtres, tri, fiches produits et favoris.
 - Panier et choix HTG/USD. Le panier et les favoris sont locaux au navigateur ; le catalogue et les commandes sont dans Supabase.
-- Commande invitée via la fonction PostgreSQL `create_order` : validation, relecture des prix, verrouillage du stock, transaction, instantanés des lignes, idempotence, numéro non séquentiel et jeton de suivi haché.
+- Commande invitée avec preuve MonCash/Natcom via `create_order_with_payment_proof`, qui s’appuie sur `create_order` pour valider la commande, relire les prix, verrouiller le stock et enregistrer les lignes de façon transactionnelle.
 - Suivi via `track_order` avec numéro + code d’accès. Le numéro seul ne donne aucun accès.
-- Back-office `/admin` avec Supabase Auth, contrôle des rôles, indicateurs, commandes, transitions de statut serveur, publication et stock.
+- Back-office `/admin` avec Supabase Auth et rôles, vue d’ensemble des ventes payées, commandes, paiements et stocks, plus les modules produits, prix, livraison, clients, notifications, équipe et paramètres.
 - Aucun formulaire ni appel de paiement en ligne.
 
 ## Démarrage
@@ -87,8 +87,8 @@ L’import/export CSV complet, les invitations depuis l’UI, les rapports graph
 
 - `/admin` : dashboard d'administration complet intégré (9 modules : vue d'ensemble, produits avec photos multiples, commandes, tarifs/taux, livraison, clients, notifications WhatsApp, équipe et rôles, paramètres). Authentification Supabase, permissions RLS.
 - Page d'accueil : carrousels produits (sélection, nouveautés) ; fiche produit : galerie multi-photos avec miniatures.
-- Checkout : choix du mode de paiement + consentement WhatsApp explicite.
-- Migrations : `001`–`003` (BIELUMINA) puis `00400`–`00600` (dashboard), `202610240007` (rôle payment_manager, statuts de vérification, WhatsApp entrant et extension de `create_order`) et `202610240008` (file de notifications e-mail/WhatsApp et destinataire privé de l’équipe).
+- Checkout : preuve de dépôt MonCash/Natcom (Txn ID et numéro du déposant) + consentement WhatsApp explicite. Le paiement reste en attente de vérification manuelle par l’équipe.
+- Migrations : `001`–`003` (BIELUMINA) puis `00400`–`00600` (dashboard), `202610240007` (rôle payment_manager, statuts de vérification, WhatsApp entrant et extension de `create_order`), `202610240008` (file de notifications e-mail/WhatsApp et destinataire privé de l’équipe) et `202610240009` (preuve de dépôt MonCash/Natcom, Txn ID et téléphone du déposant).
 - Edge Functions : `order-notifications` (envoi Resend/Meta via file, contrôle d’accès, anti-doublon et reprise) et `whatsapp-webhook` (vérification HMAC-SHA256, statuts de livraison, journalisation des messages entrants — jamais de confirmation automatique de paiement).
 - Sans identifiants Meta ou Resend : aucun message réel n'est envoyé ; l’échec est enregistré dans la file et visible depuis `/admin`.
 

@@ -11,7 +11,7 @@ Ne jamais publier `service_role`, un mot de passe de base de données, un jeton 
 
 ## Vérifier et préparer Supabase
 
-1. Vérifier l’état de la base et des migrations. Appliquer `202610240001` à `202610240008` dans l’ordre avec Supabase CLI après liaison au bon projet. La migration `007` corrige la signature de `create_order`; `008` ajoute les destinataires privés et la file de notification e-mail/WhatsApp. Ne pas réinitialiser la base de production.
+1. Vérifier l’état de la base et des migrations. Appliquer `202610240001` à `202610240009` dans l’ordre avec Supabase CLI après liaison au bon projet. La migration `007` corrige la signature de `create_order`; `008` ajoute les destinataires privés et la file de notification e-mail/WhatsApp; `009` ajoute la preuve de dépôt MonCash/Natcom. Ne pas réinitialiser la base de production.
 2. Créer le premier compte administrateur dans Authentication, puis attribuer son rôle selon la procédure du README. Activer la MFA.
 3. Configurer les URL de redirection Auth après avoir obtenu le domaine Vercel.
 4. Dans Supabase Dashboard → Edge Functions → Secrets, configurer :

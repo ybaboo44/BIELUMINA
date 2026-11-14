@@ -28,9 +28,15 @@ create unique index if not exists notifications_idempotency_unique
 -- 4. Images multiples par produit
 alter table public.product_images add column if not exists is_primary boolean not null default false;
 alter table public.product_images add column if not exists alt_text text not null default '';
-update public.product_images pi set is_primary = true
-where not exists (select 1 from public.product_images x where x.product_id = pi.product_id and x.is_primary)
-  and pi.position = (select min(position) from public.product_images y where y.product_id = pi.product_id);
+with ranked_images as (
+  select id, row_number() over (partition by product_id order by position, created_at, id) as image_rank
+  from public.product_images
+)
+update public.product_images pi
+set is_primary = ranked_images.image_rank = 1
+from ranked_images
+where ranked_images.id = pi.id
+  and pi.is_primary is distinct from (ranked_images.image_rank = 1);
  --------------------------------------------
 create table if not exists public.product_images (
   id uuid primary key default gen_random_uuid(),

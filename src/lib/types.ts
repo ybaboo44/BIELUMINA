@@ -137,12 +137,12 @@ export const orderStatusLabels: Record<string, string> = {
 };
 
 export const paymentStatusLabels: Record<string, string> = {
-  unpaid: 'Non payé', pending: 'En attente', proof_received: 'Preuve de paiement reçue',
+  unpaid: 'Non payé', pending: 'Preuve de paiement en vérification', proof_received: 'Preuve de paiement reçue',
   verification: 'En cours de vérification', paid: 'Payé confirmé',
   rejected: 'Paiement refusé', failed: 'Paiement échoué', refunded: 'Remboursé',
 };
 
 export const paymentMethodLabels: Record<string, string> = {
   on_delivery: 'Paiement à la livraison',
-  manual_transfer: 'Virement / mobile money (validation manuelle)',
+  manual_transfer: 'Dépôt mobile (validation manuelle)',
 };
