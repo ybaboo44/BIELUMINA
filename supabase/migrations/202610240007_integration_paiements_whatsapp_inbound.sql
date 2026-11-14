@@ -213,7 +213,8 @@ create policy "staff inbound whatsapp read" on public.whatsapp_inbound
 create or replace function public.create_order(
   p_customer_name text, p_phone text, p_email text, p_delivery_zone_id uuid,
   p_delivery_address text, p_instructions text, p_currency text,
-  p_items jsonb, p_idempotency_key text
+  p_items jsonb, p_idempotency_key text, p_payment_method text,
+  p_whatsapp_consent boolean
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -225,16 +226,16 @@ declare
   v_unit numeric(14,2);
   v_qty integer;
   v_token text := encode(gen_random_bytes(24),'hex');
-  v_seller_email text;
 begin
   if p_currency not in ('HTG','USD') then raise exception 'INVALID_CURRENCY'; end if;
+  if p_payment_method not in ('on_delivery','manual_transfer') then raise exception 'INVALID_PAYMENT_METHOD'; end if;
   if length(trim(p_customer_name)) < 2 or length(trim(p_phone)) < 7 then raise exception 'INVALID_CUSTOMER'; end if;
   if p_email is not null and p_email !~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' then raise exception 'INVALID_EMAIL'; end if;
   if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) < 1 or jsonb_array_length(p_items) > 30 then raise exception 'INVALID_ITEMS'; end if;
   if length(p_idempotency_key) < 16 then raise exception 'INVALID_IDEMPOTENCY'; end if;
 
   select * into v_order from public.orders where idempotency_key=p_idempotency_key;
-  if found then return jsonb_build_object('order_number',v_order.order_number,'total',v_order.total,'currency',v_order.currency,'duplicate',true); end if;
+  if found then raise exception 'DUPLICATE_ORDER_KEY'; end if;
   select * into v_zone from public.shipping_zones where id=p_delivery_zone_id and active;
   if not found then raise exception 'INVALID_SHIPPING_ZONE'; end if;
 
@@ -261,14 +262,28 @@ begin
 
   update public.orders set subtotal=v_subtotal,total=v_subtotal+shipping_fee where id=v_order.id returning * into v_order;
   insert into public.order_status_history(order_id,to_status,note) values(v_order.id,'pending_confirmation','Commande enregistrée par le client');
-  select value->>'seller_email' into v_seller_email from public.store_settings where key='store';
-  if v_seller_email is not null and v_seller_email <> '' then
-    insert into public.notifications(order_id,channel,recipient,payload) values(v_order.id,'email',v_seller_email,jsonb_build_object('order_number',v_order.order_number));
-  end if;
-  return jsonb_build_object('order_number',v_order.order_number,'total',v_order.total,'currency',v_order.currency,'access_token',v_token,'duplicate',false);
+  return jsonb_build_object(
+    'order_number', v_order.order_number,
+    'total', v_order.total,
+    'subtotal', v_order.subtotal,
+    'shipping_fee', v_order.shipping_fee,
+    'currency', v_order.currency,
+    'status', v_order.status,
+    'payment_status', v_order.payment_status,
+    'payment_method', v_order.payment_method,
+    'access_token', v_token,
+    'items', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'name', product_name, 'variant', variant_name, 'quantity', quantity,
+        'unit_price', unit_price, 'line_total', line_total
+      ) order by id)
+      from public.order_items where order_id = v_order.id
+    ), '[]'::jsonb),
+    'duplicate', false
+  );
 exception when unique_violation then
   select * into v_order from public.orders where idempotency_key=p_idempotency_key;
-  if found then return jsonb_build_object('order_number',v_order.order_number,'total',v_order.total,'currency',v_order.currency,'duplicate',true); end if;
+  if found then raise exception 'DUPLICATE_ORDER_KEY'; end if;
   raise;
 end $$;
 grant execute on function public.create_order(text,text,text,uuid,text,text,text,jsonb,text,text,boolean) to anon, authenticated;

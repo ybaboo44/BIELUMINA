@@ -11,19 +11,25 @@ Ne jamais publier `service_role`, un mot de passe de base de données, un jeton 
 
 ## Vérifier et préparer Supabase
 
-1. Dans Supabase Dashboard, confirmer que les migrations `202610240001` à `202610240007` sont appliquées et que le catalogue de production est prêt. Ne pas réinitialiser la base de production.
+1. Vérifier l’état de la base et des migrations. Appliquer `202610240001` à `202610240008` dans l’ordre avec Supabase CLI après liaison au bon projet. La migration `007` corrige la signature de `create_order`; `008` ajoute les destinataires privés et la file de notification e-mail/WhatsApp. Ne pas réinitialiser la base de production.
 2. Créer le premier compte administrateur dans Authentication, puis attribuer son rôle selon la procédure du README. Activer la MFA.
 3. Configurer les URL de redirection Auth après avoir obtenu le domaine Vercel.
-4. Les fonctions WhatsApp sont facultatives pour le lancement de la boutique. Si elles sont activées, les déployer avec Supabase CLI après liaison au bon projet :
+4. Dans Supabase Dashboard → Edge Functions → Secrets, configurer :
+   - `RESEND_API_KEY` et `EMAIL_FROM` (adresse d’expédition vérifiée chez Resend).
+   - `CRON_SECRET` (valeur aléatoire longue, pour le traitement planifié de la file).
+   - Pour WhatsApp : `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION` et les modèles Meta approuvés.
+5. Après application des migrations, ouvrir `/admin` → Paramètres et configurer l’e-mail privé de l’équipe (et éventuellement son WhatsApp privé). Activer le canal e-mail. Pour envoyer au client par e-mail, celui-ci doit renseigner son adresse au checkout ; pour WhatsApp, il doit cocher le consentement.
+6. Déployer les fonctions avec Supabase CLI après liaison au bon projet :
 
    ```powershell
    supabase login
    supabase link --project-ref <reference-du-projet>
-   supabase functions deploy whatsapp-notifications
+   supabase functions deploy order-notifications --no-verify-jwt
    supabase functions deploy whatsapp-webhook
    ```
 
-   Configurer leurs secrets exclusivement dans Supabase (Dashboard ou `supabase secrets set`). Les noms et les étapes Meta sont documentés dans [docs/WHATSAPP_SETUP.md](./docs/WHATSAPP_SETUP.md). Sans configuration et modèles Meta approuvés, aucun message réel n’est envoyé.
+   `order-notifications` valide le code privé de suivi du client pour sa demande de confirmation et les permissions Supabase pour les actions admin. `--no-verify-jwt` est nécessaire pour laisser passer la demande de commande invitée ; l’autorisation est contrôlée dans la fonction. Ne pas exposer de clé service-role. Les étapes Meta sont documentées dans [docs/WHATSAPP_SETUP.md](./docs/WHATSAPP_SETUP.md).
+7. Configurer un cron externe pour appeler chaque minute `POST https://<ref>.supabase.co/functions/v1/order-notifications` avec l’en-tête `x-cron-secret: <CRON_SECRET>` et le JSON `{"action":"dispatch_due"}`. Désactiver tout ancien cron appelant `whatsapp-notifications` pour éviter deux workers sur la même file.
 
 ## Déployer sur Vercel
 
@@ -34,7 +40,7 @@ Ne jamais publier `service_role`, un mot de passe de base de données, un jeton 
    - `VITE_SUPABASE_PUBLISHABLE_KEY` : clé publique `publishable` de ce même projet.
 4. Déployer, puis noter le domaine HTTPS généré.
 5. Dans Supabase → Authentication → URL Configuration, définir l’URL du site en production et autoriser les URL de redirection requises.
-6. Vérifier la boutique, l’authentification `/admin`, la création et le suivi d’une commande test. Ne pas utiliser de données ou de paiements réels pour ce test.
+6. Vérifier la boutique, l’authentification `/admin`, la création et le suivi d’une commande test, et l’arrivée des notifications chez le client et l’équipe. Ne pas utiliser de données ou de paiements réels pour ce test.
 
 Le client échoue volontairement avec une erreur explicite si les variables Supabase sont absentes ; ne pas promouvoir un déploiement sans ces deux variables.
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, LockKeyhole } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { useForm, useWatch, type Resolver } from 'react-hook-form';
@@ -31,47 +31,90 @@ const schema = z.object({
   consent: z.boolean().refine(Boolean,'Votre accord est nécessaire pour enregistrer la commande.'),
   payment_method: z.enum(['on_delivery','manual_transfer']),
   whatsapp_consent: z.boolean().default(false),
+}).superRefine((data, context) => {
+  if (!data.email && !data.whatsapp_consent) {
+    context.addIssue({ code: 'custom', path: ['whatsapp_consent'], message: 'Indiquez un e-mail ou acceptez la confirmation par WhatsApp.' });
+  }
 });
 
 const resolver: Resolver<FormData> = zodResolver(schema) as Resolver<FormData>;
 
 export function CheckoutPage() {
   const { cart, currency, subtotal, clearCart } = useStore();
-  const zones = useShippingZones(); const navigate = useNavigate();
+  const { zones, loading: zonesLoading, error: zonesError, refresh: refreshZones } = useShippingZones();
+  const navigate = useNavigate();
+  const idempotencyKey = useRef<string | null>(null);
   const [methods,setMethods] = useState<PaymentMethod[]>([]);
-  useEffect(() => { void supabase.from('store_settings').select('value').eq('key','payments').single()
-    .then(({data}) => setMethods((((data?.value as {methods?:PaymentMethod[]})?.methods) || []).filter((m:PaymentMethod) => m.active))); }, []);
   const [serverError,setServerError] = useState('');
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const { data, error } = await supabase.from('store_settings').select('value').eq('key','payments').maybeSingle();
+        if (!active) return;
+        if (error) {
+          setServerError('Les modes de paiement sont momentanément indisponibles. Vous pouvez réessayer.');
+          return;
+        }
+        setMethods((((data?.value as {methods?:PaymentMethod[]})?.methods) || []).filter((m:PaymentMethod) => m.active));
+      } catch {
+        if (active) setServerError('Les modes de paiement sont momentanément indisponibles. Vous pouvez réessayer.');
+      }
+    })();
+    return () => { active = false; };
+  }, []);
   const { register, handleSubmit, control, formState: { errors,isSubmitting } } = useForm<FormData>({ resolver, defaultValues: { name:'',phone:'',email:'',zone:'',address:'',instructions:'',consent:false,payment_method:'on_delivery',whatsapp_consent:false } });
   const zoneId = useWatch({ control, name: 'zone' });
-  const shipping = useMemo(() => { const z = zones.find(z => z.id===zoneId); return z ? Number(currency==='HTG'?z.fee_htg:z.fee_usd) : 0; }, [zones,zoneId,currency]);
+  const shipping = useMemo(() => { const zone = zones.find(zone => zone.id===zoneId); return zone ? Number(currency==='HTG'?zone.fee_htg:zone.fee_usd) : 0; }, [zones,zoneId,currency]);
 
   const submit = async (data: FormData) => {
     setServerError('');
-    const nextIdempotencyKey = crypto.randomUUID();
+    if (zonesLoading || zonesError || !zones.some(zone => zone.id === data.zone)) {
+      setServerError('Choisissez une zone de livraison disponible avant de confirmer la commande.');
+      return;
+    }
+    idempotencyKey.current ??= crypto.randomUUID();
     const { data: result, error } = await supabase.rpc('create_order', {
       p_customer_name:data.name,p_phone:data.phone,p_email:data.email||null,p_delivery_zone_id:data.zone,
       p_delivery_address:data.address,p_instructions:data.instructions||'',p_currency:currency,
-      p_items:cart.map(line=>({variant_id:line.variant.id,quantity:line.quantity})),p_idempotency_key:nextIdempotencyKey,p_payment_method:data.payment_method,p_whatsapp_consent:data.whatsapp_consent,
+      p_items:cart.map(line=>({variant_id:line.variant.id,quantity:line.quantity})),p_idempotency_key:idempotencyKey.current,p_payment_method:data.payment_method,p_whatsapp_consent:data.whatsapp_consent,
     });
-    if (error) { const code=error.message||''; setServerError(code.includes('INSUFFICIENT_STOCK')?'Un article n’est plus disponible dans la quantité demandée. Actualisez votre panier.':code.includes('PRODUCT_UNAVAILABLE')?'Un article n’est plus disponible. Retirez-le du panier pour continuer.':'La commande n’a pas pu être enregistrée. Vérifiez vos informations et réessayez.'); return; }
-    const items = cart.map(line => ({ name: line.product.name, variant: line.variant.name, quantity: line.quantity,
-      unit_price: Number(priceFor(line.product, currency) || 0), line_total: Math.round(Number(priceFor(line.product, currency) || 0) * line.quantity * 100) / 100 }));
-    const confirmation = { ...(result as Record<string, unknown>), items };
+    if (error) {
+      const code=error.message||'';
+      setServerError(code.includes('INSUFFICIENT_STOCK')?'Un article n’est plus disponible dans la quantité demandée. Actualisez votre panier.':code.includes('PRODUCT_UNAVAILABLE')?'Un article n’est plus disponible. Retirez-le du panier pour continuer.':code.includes('INVALID_SHIPPING_ZONE')?'Cette zone de livraison n’est plus disponible. Choisissez-en une autre.':code.includes('DUPLICATE_ORDER_KEY')?'Cette tentative de commande a déjà été traitée. Vérifiez votre e-mail ou contactez notre équipe avant de recommencer.':'La commande n’a pas pu être enregistrée. Vérifiez vos informations et réessayez.');
+      return;
+    }
+    if (!result || typeof result !== 'object' || !('order_number' in result) || !('access_token' in result)) {
+      setServerError('Le serveur n’a pas renvoyé la confirmation attendue. Contactez notre équipe avant de recommencer.');
+      return;
+    }
+    const confirmation: Record<string, unknown> = { ...(result as Record<string, unknown>) };
+    let notificationNotice = '';
+    const { data: delivery, error: deliveryError } = await supabase.functions.invoke('order-notifications', {
+      body: { action: 'dispatch_order', order_number: confirmation.order_number, access_token: confirmation.access_token },
+    });
+    if (deliveryError) {
+      notificationNotice = 'Votre commande est enregistrée, mais le service de notification ne répond pas. Notre équipe doit vérifier la configuration des e-mails et de WhatsApp.';
+    } else if (!delivery || delivery.processed === 0) {
+      notificationNotice = 'Votre commande est enregistrée, mais aucun canal de notification actif n’a été trouvé. Notre équipe doit vérifier les paramètres de contact.';
+    } else if (delivery.ok !== true) {
+      notificationNotice = 'Votre commande est enregistrée, mais une ou plusieurs notifications n’ont pas pu être envoyées. Notre équipe peut les relancer depuis l’administration.';
+    }
+    confirmation.notification_notice = notificationNotice;
     sessionStorage.setItem('bl-last-order', JSON.stringify(confirmation)); clearCart(); navigate('/confirmation', { state: confirmation });
   };
 
   if (!cart.length) return <main className="empty-state page-empty"><h1>Votre panier est vide</h1><Link className="button button-dark" to="/boutique">Retour à la boutique</Link></main>;
   return <main className="section-shell checkout-page"><Link className="back-link" to="/panier"><ArrowLeft size={16}/> Retour au panier</Link><div className="page-intro"><span className="eyebrow">FINALISER VOTRE COMMANDE</span><h1>Vos coordonnées</h1><p>Notre équipe vous contactera pour confirmer la disponibilité, la livraison et le règlement.</p></div>
     <form className="checkout-layout" onSubmit={handleSubmit(submit)}><div className="checkout-form">
-      <section><h2><span>1</span> Informations client</h2><div className="form-grid"><label className="field full"><span>Nom complet *</span><input {...register('name')} autoComplete="name" placeholder="Votre nom et prénom" />{errors.name&&<small className="field-error">{errors.name.message}</small>}</label><label className="field"><span>Téléphone *</span><input {...register('phone')} autoComplete="tel" placeholder="+509 …" />{errors.phone&&<small className="field-error">{errors.phone.message}</small>}</label><label className="field"><span>E-mail (facultatif)</span><input {...register('email')} type="email" autoComplete="email" placeholder="vous@exemple.com" />{errors.email&&<small className="field-error">{errors.email.message}</small>}</label></div></section>
-      <section><h2><span>2</span> Livraison</h2><div className="form-grid"><label className="field full"><span>Zone de livraison *</span><select {...register('zone')}><option value="">Sélectionnez votre zone</option>{zones.map(z=><option value={z.id} key={z.id}>{z.name} — {money(currency==='HTG'?z.fee_htg:z.fee_usd,currency)}</option>)}</select>{errors.zone&&<small className="field-error">{errors.zone.message}</small>}</label><label className="field full"><span>Adresse / indication de livraison *</span><textarea {...register('address')} rows={3} placeholder="Commune, rue, repère…" />{errors.address&&<small className="field-error">{errors.address.message}</small>}</label><label className="field full"><span>Instructions (facultatif)</span><textarea {...register('instructions')} rows={3} placeholder="Précisions utiles pour notre équipe" /></label></div></section>
+      <section><h2><span>1</span> Informations client</h2><div className="form-grid"><label className="field full"><span>Nom complet *</span><input {...register('name')} autoComplete="name" placeholder="Votre nom et prénom" />{errors.name&&<small className="field-error">{errors.name.message}</small>}</label><label className="field"><span>Téléphone *</span><input {...register('phone')} autoComplete="tel" placeholder="+509 …" />{errors.phone&&<small className="field-error">{errors.phone.message}</small>}</label><label className="field"><span>E-mail (ou confirmation WhatsApp)</span><input {...register('email')} type="email" autoComplete="email" placeholder="vous@exemple.com" />{errors.email&&<small className="field-error">{errors.email.message}</small>}</label></div></section>
+      <section><h2><span>2</span> Livraison</h2><div className="form-grid"><label className="field full"><span>Zone de livraison *</span><select {...register('zone')} disabled={zonesLoading||Boolean(zonesError)||zones.length===0}><option value="">{zonesLoading?'Chargement des zones…':'Sélectionnez votre zone'}</option>{zones.map(zone=><option value={zone.id} key={zone.id}>{zone.name} — {money(currency==='HTG'?zone.fee_htg:zone.fee_usd,currency)}</option>)}</select>{errors.zone&&<small className="field-error">{errors.zone.message}</small>}</label>{zonesError&&<div className="field full form-error" role="alert">Impossible de charger les zones de livraison. {zonesError}<button className="button button-outline" type="button" onClick={() => void refreshZones()}>Réessayer</button></div>}{!zonesLoading&&!zonesError&&zones.length===0&&<p className="field full form-error" role="alert">Aucune zone de livraison n’est configurée pour le moment. Veuillez réessayer plus tard.</p>}<label className="field full"><span>Adresse / indication de livraison *</span><textarea {...register('address')} rows={3} placeholder="Commune, rue, repère…" />{errors.address&&<small className="field-error">{errors.address.message}</small>}</label><label className="field full"><span>Instructions (facultatif)</span><textarea {...register('instructions')} rows={3} placeholder="Précisions utiles pour notre équipe" /></label></div></section>
       <section><h2><span>3</span> Mode de paiement</h2><div className="form-grid">{methods.length===0&&<p className="field full">Paiement à la livraison (configuration par défaut).</p>}{methods.map(m=><label className="field full payment-option" key={m.id}><input type="radio" value={m.id} {...register('payment_method')} /><span><strong>{m.label}</strong><small>{m.instructions}</small></span></label>)}</div>{errors.payment_method&&<small className="field-error">{errors.payment_method.message}</small>}</section>
-      <label className="consent whatsapp-consent"><input type="checkbox" {...register('whatsapp_consent')} /><span>J’accepte de recevoir la confirmation et le suivi de ma commande par WhatsApp au numéro indiqué (format international +509…).</span></label>
+      <label className="consent whatsapp-consent"><input type="checkbox" {...register('whatsapp_consent')} /><span>J’accepte de recevoir la confirmation et le suivi de ma commande par WhatsApp au numéro indiqué (format international +509…). Cochez cette case ou renseignez votre e-mail.</span></label>{errors.whatsapp_consent&&<small className="field-error">{errors.whatsapp_consent.message}</small>}
       <label className="consent"><input type="checkbox" {...register('consent')} /><span>J’accepte que BIELUMINA utilise ces informations pour traiter ma commande et me contacter. Je comprends qu’aucun paiement n’est effectué maintenant.</span></label>{errors.consent&&<small className="field-error">{errors.consent.message}</small>}
       {serverError&&<div className="form-error" role="alert">{serverError}</div>}
     </div>
-    <aside className="order-summary checkout-summary"><h2>Votre commande</h2><div className="checkout-items">{cart.map(line=><div key={line.variant.id}><img src={primaryImage(line.product)} alt=""/><span>{line.product.name}<small>{line.variant.name} · Qté {line.quantity}</small></span><strong>{money(Number(priceFor(line.product,currency)||0)*line.quantity,currency)}</strong></div>)}</div><div><span>Sous-total</span><strong>{money(subtotal,currency)}</strong></div><div><span>Livraison</span><strong>{zoneId?money(shipping,currency):'À sélectionner'}</strong></div><div className="summary-total"><span>Total en {currency}</span><strong>{money(subtotal+shipping,currency)}</strong></div><button className="button button-gold" type="submit" disabled={isSubmitting}>{isSubmitting?'Enregistrement…':<>Confirmer la commande <ArrowRight size={18}/></>}</button><p><LockKeyhole size={14}/> Vos informations sont transmises de façon sécurisée. Aucun paiement en ligne.</p></aside>
+    <aside className="order-summary checkout-summary"><h2>Votre commande</h2><div className="checkout-items">{cart.map(line=><div key={line.variant.id}><img src={primaryImage(line.product)} alt=""/><span>{line.product.name}<small>{line.variant.name} · Qté {line.quantity}</small></span><strong>{money(Number(priceFor(line.product,currency)||0)*line.quantity,currency)}</strong></div>)}</div><div><span>Sous-total</span><strong>{money(subtotal,currency)}</strong></div><div><span>Livraison</span><strong>{zoneId?money(shipping,currency):'À sélectionner'}</strong></div><div className="summary-total"><span>Total en {currency}</span><strong>{money(subtotal+shipping,currency)}</strong></div><button className="button button-gold" type="submit" disabled={isSubmitting||zonesLoading||Boolean(zonesError)||zones.length===0}>{isSubmitting?'Enregistrement…':zonesLoading?'Chargement des zones…':<>Confirmer la commande <ArrowRight size={18}/></>}</button><p><LockKeyhole size={14}/> Vos informations sont transmises de façon sécurisée. Aucun paiement en ligne.</p></aside>
     </form>
   </main>;
 }

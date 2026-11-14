@@ -7,7 +7,8 @@ import { toast } from 'sonner';
 
 type ConfirmationItem = { name:string; variant:string; quantity:number; unit_price:number; line_total:number };
 type Confirmation = { order_number:string; total:number; currency:'HTG'|'USD'; access_token?:string;
-  status?:string; payment_status?:string; payment_method?:string; subtotal?:number; shipping_fee?:number; items?:ConfirmationItem[] };
+  status?:string; payment_status?:string; payment_method?:string; subtotal?:number; shipping_fee?:number;
+  notification_notice?:string; items?:ConfirmationItem[] };
 
 export function ConfirmationPage() {
   const location = useLocation();
@@ -15,7 +16,7 @@ export function ConfirmationPage() {
   const [copied,setCopied] = useState(false);
   if (!order) return <main className="empty-state page-empty"><h1>Aucune commande récente</h1><Link className="button button-dark" to="/suivi-commande">Suivre une commande</Link></main>;
   const copy = async () => { await navigator.clipboard.writeText(`Commande BIELUMINA ${order.order_number} — Total ${money(order.total,order.currency)}`); setCopied(true); toast.success('Référence copiée'); };
-  return <main className="confirmation-page"><div className="confirmation-icon"><CheckCircle2 /></div><span className="eyebrow">COMMANDE ENREGISTRÉE</span><h1>Merci pour votre confiance.</h1><p>Votre commande <strong>{order.order_number}</strong> est bien enregistrée. Elle reste <strong>en attente de confirmation</strong> par notre équipe.</p>{order.items && order.items.length > 0 && <div className="confirmation-items"><h2>Votre sélection</h2>{order.items.map((item, i) => <div className="confirmation-line" key={i}><span>{item.name} <small>{item.variant}</small></span><span>× {item.quantity}</span><strong>{money(item.line_total, order.currency)}</strong></div>)}</div>}
+  return <main className="confirmation-page"><div className="confirmation-icon"><CheckCircle2 /></div><span className="eyebrow">COMMANDE ENREGISTRÉE</span><h1>Merci pour votre confiance.</h1><p>Votre commande <strong>{order.order_number}</strong> est bien enregistrée. Elle reste <strong>en attente de confirmation</strong> par notre équipe.</p>{order.notification_notice&&<div className="form-error" role="status">{order.notification_notice}</div>}{order.items && order.items.length > 0 && <div className="confirmation-items"><h2>Votre sélection</h2>{order.items.map((item, i) => <div className="confirmation-line" key={i}><span>{item.name} <small>{item.variant}</small></span><span>× {item.quantity}</span><strong>{money(item.line_total, order.currency)}</strong></div>)}</div>}
       <div className="confirmation-total">
         {order.subtotal !== undefined && <div><span>Sous-total</span><strong>{money(order.subtotal, order.currency)}</strong></div>}
         {order.shipping_fee !== undefined && <div><span>Livraison</span><strong>{money(order.shipping_fee, order.currency)}</strong></div>}

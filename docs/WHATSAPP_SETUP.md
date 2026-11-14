@@ -6,11 +6,24 @@
 - Récupérer : Access Token (temporaire 24 h, puis token système permanent),
   Phone Number ID, WhatsApp Business Account ID.
 
-## 2. Variables (supabase secrets set — jamais dans le frontend)
+## 2. Variables (secrets Supabase — jamais dans le frontend)
 WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_BUSINESS_ACCOUNT_ID,
 WHATSAPP_VERIFY_TOKEN (chaine aléatoire générée par vous), WHATSAPP_APP_SECRET
 (App Secret de l'app Meta), WHATSAPP_API_VERSION (v23.0), WHATSAPP_TEMPLATE_NAME,
-APP_BASE_URL, CRON_SECRET.
+CRON_SECRET. Pour l’e-mail transactionnel, configurer aussi `RESEND_API_KEY` et
+`EMAIL_FROM` (domaine expéditeur vérifié dans Resend). L’adresse privée de l’équipe
+est configurée dans `/admin` → Paramètres ; elle n’est pas publique.
+
+Déployer le dispatcher après application des migrations :
+
+```powershell
+supabase functions deploy order-notifications --no-verify-jwt
+```
+
+Le dispatcher accepte la confirmation invitée uniquement avec le code d’accès
+retourné pour la commande, et vérifie les permissions des appels administrateur.
+`--no-verify-jwt` est donc requis pour le checkout invité ; ne pas retirer les
+contrôles d’accès intégrés à la fonction.
 
 ## 3. Modèles de messages (Meta → WhatsApp Manager → Modèles)
 Créer un modèle par transition : order_pending_confirmation, order_confirmed,
@@ -32,10 +45,20 @@ La signature X-Hub-Signature-256 est vérifiée avec WHATSAPP_APP_SECRET ; toute
 requête non signée est rejetée (403).
 
 ## 5. Traitement de la file
-Le cron appelle toutes les minutes :
-curl -X POST https://<ref>.supabase.co/functions/v1/whatsapp-notifications   -H "x-cron-secret: $CRON_SECRET" -d '{"action":"process-due"}'
-Backoff exponentiel plafonné, 5 tentatives max, idempotence par
-notifications.idempotency_key (une transition = une notification).
+Le checkout lance les notifications immédiates après l’enregistrement de la
+commande. Un cron externe doit appeler chaque minute le dispatcher pour les
+changements de statut et les nouvelles tentatives :
+
+```bash
+curl -X POST "https://<ref>.supabase.co/functions/v1/order-notifications" \
+  -H "Content-Type: application/json" \
+  -H "x-cron-secret: $CRON_SECRET" \
+  -d '{"action":"dispatch_due"}'
+```
+
+La file applique une reprise plafonnée à cinq tentatives et une clé
+`notifications.idempotency_key` par destinataire/canal/transition. Désactiver
+tout ancien cron `whatsapp-notifications` afin qu’un seul worker traite la file.
 
 ## 6. Messages entrants
 Journalisés dans whatsapp_inbound (lecture staff, RLS). Un message entrant ne

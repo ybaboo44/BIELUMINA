@@ -26,8 +26,23 @@ export function useCatalog() {
 
 export function useShippingZones() {
   const [zones, setZones] = useState<ShippingZone[]>([]);
-  useEffect(() => {
-    supabase.from('shipping_zones').select('*').order('fee_htg').then(({ data }) => setZones((data || []) as ShippingZone[]));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const { data, error: queryError } = await supabase.from('shipping_zones').select('*').order('fee_htg');
+      if (queryError) throw queryError;
+      setZones((data || []) as ShippingZone[]);
+    } catch (queryError) {
+      setError(queryError instanceof Error ? queryError.message : 'Impossible de charger les zones de livraison.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
-  return zones;
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+  return { zones, loading, error, refresh };
 }

@@ -20,36 +20,71 @@ const nav:{id:Page;label:string;icon:typeof LayoutDashboard;permission?:string}[
 ]
 
 function App(){
-  const [session,setSession]=useState<Session>(null),[authReady,setAuthReady]=useState(false)
+  const [session,setSession]=useState<Session>(null),[authReady,setAuthReady]=useState(false),[authError,setAuthError]=useState('')
   const [page,setPage]=useState<Page>('overview'),[collapsed,setCollapsed]=useState(false),[mobileOpen,setMobileOpen]=useState(false),[dark,setDark]=useState(()=>localStorage.getItem('bl-theme')==='dark')
-  const [data,setData]=useState<Data>(emptyData),[loading,setLoading]=useState(false),[roles,setRoles]=useState<string[]>([]),[permissions,setPermissions]=useState<string[]>([])
+  const [data,setData]=useState<Data>(emptyData),[loading,setLoading]=useState(false),[loadError,setLoadError]=useState(''),[roles,setRoles]=useState<string[]>([]),[permissions,setPermissions]=useState<string[]>([])
   const [searchOpen,setSearchOpen]=useState(false),[profileOpen,setProfileOpen]=useState(false),[query,setQuery]=useState('')
   useEffect(()=>{document.documentElement.classList.toggle('dark',dark);localStorage.setItem('bl-theme',dark?'dark':'light')},[dark])
-  useEffect(()=>{supabase.auth.getSession().then(({data})=>{setSession(data.session as Session);setAuthReady(true)});const {data:{subscription}}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s as Session));return()=>subscription.unsubscribe()},[])
+  useEffect(()=>{
+    let active=true
+    supabase.auth.getSession().then(({data,error})=>{
+      if(error)throw error
+      if(active){setSession(data.session as Session);setAuthReady(true)}
+    }).catch(error=>{
+      if(active){setAuthError(error instanceof Error?error.message:'Impossible de vérifier la session Supabase.');setAuthReady(true)}
+    })
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s as Session))
+    return()=>{active=false;subscription.unsubscribe()}
+  },[])
   const load=useCallback(async()=>{
-    if(!session){setData(emptyData);setRoles([]);setPermissions([]);return} setLoading(true)
-    const {data:ownRoles}=await supabase.from('user_roles').select('role').eq('user_id',session.user.id)
-    const roleList=(ownRoles||[]).map(r=>r.role);setRoles(roleList)
-    const {data:perms}=await supabase.from('role_permissions').select('role,permission')
-    const allowed=(perms||[]).filter(p=>roleList.includes(p.role)).map(p=>p.permission);setPermissions(allowed)
-    const staffAllowed=allowed.includes('staff.write')
-    const [products,categories,orders,zones,notifications,staff,settings,rates,audit]=await Promise.all([
-      supabase.from('products').select('*,product_variants(*),product_images(*),categories(name)').order('created_at',{ascending:false}),
-      supabase.from('categories').select('*').order('position'), supabase.from('orders').select('*,order_items(*),shipping_zones(name)').order('created_at',{ascending:false}),
-      supabase.from('shipping_zones').select('*').order('name'),supabase.from('notifications').select('*,orders(order_number)').order('created_at',{ascending:false}),
-      staffAllowed?supabase.from('profiles').select('*,user_roles(role)').order('created_at'):Promise.resolve({data:[]}),
-      supabase.from('store_settings').select('*'),supabase.from('exchange_rates').select('*').order('effective_at',{ascending:false}),
-      allowed.includes('audit.read')?supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100):Promise.resolve({data:[]})
-    ])
-    const errors=[products,categories,orders,zones,notifications,settings,rates].find(r=>r.error)
-    if(errors?.error) toast.error('Chargement incomplet : '+errors.error.message)
-    setData({products:(products.data||[]) as Product[],categories:(categories.data||[]) as Category[],orders:(orders.data||[]) as Order[],zones:(zones.data||[]) as Zone[],notifications:(notifications.data||[]) as Notification[],staff:(staff.data||[]) as Staff[],settings:(settings.data||[]) as Settings[],rates:(rates.data||[]) as ExchangeRate[],audit:(audit.data||[]) as Audit[]});setLoading(false)
+    if(!session){setData(emptyData);setRoles([]);setPermissions([]);setLoadError('');return}
+    setLoading(true);setLoadError('')
+    try {
+      const {data:ownRoles,error:rolesError}=await supabase.from('user_roles').select('role').eq('user_id',session.user.id)
+      if(rolesError)throw rolesError
+      const roleList=(ownRoles||[]).map(r=>r.role);setRoles(roleList)
+      const {data:perms,error:permissionsError}=await supabase.from('role_permissions').select('role,permission')
+      if(permissionsError)throw permissionsError
+      const allowed=(perms||[]).filter(p=>roleList.includes(p.role)).map(p=>p.permission);setPermissions(allowed)
+      const [products,categories,orders,zones,notifications,staff,settings,rates,audit]=await Promise.all([
+        supabase.from('products').select('*,product_variants(*),product_images(*),categories(name)').order('created_at',{ascending:false}),
+        supabase.from('categories').select('*').order('position'),
+        supabase.from('orders').select('*,order_items(*),shipping_zones(name)').order('created_at',{ascending:false}),
+        supabase.from('shipping_zones').select('*').order('name'),
+        supabase.from('notifications').select('*,orders(order_number)').order('created_at',{ascending:false}),
+        allowed.includes('staff.write')?supabase.from('profiles').select('*,user_roles(role)').order('created_at'):Promise.resolve({data:[],error:null}),
+        supabase.from('store_settings').select('*'),
+        supabase.from('exchange_rates').select('*').order('effective_at',{ascending:false}),
+        allowed.includes('audit.read')?supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(100):Promise.resolve({data:[],error:null})
+      ])
+      const failed=[products,categories,orders,zones,notifications,staff,settings,rates,audit].find(result=>result.error)
+      if(failed?.error)throw failed.error
+      setData({products:(products.data||[]) as Product[],categories:(categories.data||[]) as Category[],orders:(orders.data||[]) as Order[],zones:(zones.data||[]) as Zone[],notifications:(notifications.data||[]) as Notification[],staff:(staff.data||[]) as Staff[],settings:(settings.data||[]) as Settings[],rates:(rates.data||[]) as ExchangeRate[],audit:(audit.data||[]) as Audit[]})
+    } catch(error) {
+      const message=error instanceof Error?error.message:'Erreur de chargement des données administrateur.'
+      setLoadError(message);toast.error('Tableau de bord indisponible : '+message)
+    } finally {setLoading(false)}
   },[session])
   useEffect(()=>{void load()},[load])
+  useEffect(()=>{
+    const now=Date.now()
+    if(!session||loading||loadError||!permissions.includes('orders.write')||!data.notifications.some(notification=>['pending','failed'].includes(notification.status)&&new Date(notification.next_attempt_at).getTime()<=now))return
+    let active=true
+    supabase.functions.invoke('order-notifications',{body:{action:'dispatch_due',limit:25}}).then(({data:result,error})=>{
+      if(!active)return
+      if(error)toast.error(`Envoi des notifications impossible : ${error.message}`)
+      else if(result?.ok===false)toast.error('Certaines notifications n’ont pas été envoyées. Consultez leur code d’erreur dans le centre de notifications.')
+    }).catch(error=>{
+      if(active)toast.error(`Envoi des notifications impossible : ${error instanceof Error?error.message:'erreur inconnue'}`)
+    })
+    return()=>{active=false}
+  },[session,loading,loadError,permissions,data.notifications])
   const can=(permission:string)=>permissions.includes(permission)
   const logout=async()=>{await supabase.auth.signOut();setPage('overview');setProfileOpen(false)}
   if(!authReady)return <div className="boot"><img src="/bielumina-logo.png" alt="BIELUMINA"/><Loader2 className="spin"/></div>
+  if(authError)return <div className="access-denied"><img src="/bielumina-logo.png" alt=""/><h1>Connexion Supabase indisponible</h1><p>{authError}</p><button className="btn secondary" onClick={()=>window.location.reload()}>Réessayer</button></div>
   if(!session)return <Login/>
+  if(loadError)return <div className="access-denied"><img src="/bielumina-logo.png" alt=""/><ShieldCheck/><h1>Chargement du tableau de bord impossible</h1><p>{loadError}</p><button className="btn primary" onClick={()=>void load()}>Réessayer</button><button className="btn secondary" onClick={logout}>Se déconnecter</button></div>
   if(!roles.length)return <div className="access-denied"><img src="/bielumina-logo.png" alt=""/><ShieldCheck/><h1>Accès administrateur requis</h1><p>Ce compte n’a aucun rôle dans l’espace BIELUMINA.</p><button className="btn secondary" onClick={logout}>Se déconnecter</button></div>
   const active=nav.find(n=>n.id===page)!
   const go=(p:Page)=>{setPage(p);setMobileOpen(false);setSearchOpen(false);setQuery('')}
@@ -166,10 +201,76 @@ function Pricing({data,reload,can}:CommonProps){const commerce=data.settings.fin
 function Shipping({data,reload,can}:CommonProps){const[editing,setEditing]=useState<Zone|null|undefined>(undefined);return <><PageHead eyebrow="LOGISTIQUE" title="Livraison et zones" text="Des tarifs lisibles par commune, figés dans chaque commande au moment de sa validation.">{can('orders.write')&&<button className="btn primary" onClick={()=>setEditing(null)}><Plus/>Nouvelle zone</button>}</PageHead><div className="zone-grid">{data.zones.map(z=><article className="zone-card" key={z.id}><div className="zone-top"><span className="zone-icon"><Truck/></span><Badge tone={z.active?'success':'neutral'}>{z.active?'Active':'Inactive'}</Badge></div><h2>{z.name}</h2><p>{z.delivery_type==='express'?'Livraison express':'Livraison standard'}</p><div className="zone-price"><strong>{money(z.fee_htg)}</strong><span>{money(z.fee_usd,'USD')}</span></div>{z.free_threshold&&<small>Gratuite dès {money(z.free_threshold)}</small>}<div className="zone-footer"><span>Frais suppl. {money(z.extra_fee)}</span>{can('orders.write')&&<button className="icon-btn" onClick={()=>setEditing(z)}><Edit3/></button>}</div></article>)}</div>{!data.zones.length&&<Empty icon={Truck} title="Aucune zone" text="Créez votre première zone de livraison."/>}{editing!==undefined&&<ZoneForm zone={editing} onClose={()=>setEditing(undefined)} onSaved={async()=>{setEditing(undefined);await reload()}}/>}</>}
 function ZoneForm({zone,onClose,onSaved}:{zone:Zone|null;onClose:()=>void;onSaved:()=>Promise<void>}){const[f,setF]=useState({name:zone?.name||'',fee_htg:String(zone?.fee_htg??250),fee_usd:String(zone?.fee_usd??2),delivery_type:zone?.delivery_type||'standard',free_threshold:String(zone?.free_threshold??''),extra_fee:String(zone?.extra_fee??0),active:zone?.active??true});const[busy,setBusy]=useState(false),[error,setError]=useState('');const submit=async(e:FormEvent)=>{e.preventDefault();setBusy(true);const payload={...f,fee_htg:Number(f.fee_htg),fee_usd:Number(f.fee_usd),free_threshold:f.free_threshold?Number(f.free_threshold):null,extra_fee:Number(f.extra_fee)};const r=zone?await supabase.from('shipping_zones').update(payload).eq('id',zone.id):await supabase.from('shipping_zones').insert(payload);setBusy(false);if(r.error)setError(r.error.message);else{toast.success('Zone de livraison enregistrée');await onSaved()}};return <Modal title={zone?'Modifier la zone':'Nouvelle zone de livraison'} onClose={onClose} wide={false}><form className="form-grid" onSubmit={submit}><label className="span-2">Commune ou secteur<input required value={f.name} onChange={e=>setF({...f,name:e.target.value})}/></label><label>Tarif HTG<input type="number" min="0" required value={f.fee_htg} onChange={e=>setF({...f,fee_htg:e.target.value})}/></label><label>Tarif USD<input type="number" min="0" step="0.01" required value={f.fee_usd} onChange={e=>setF({...f,fee_usd:e.target.value})}/></label><label>Type<select value={f.delivery_type} onChange={e=>setF({...f,delivery_type:e.target.value})}><option value="standard">Standard</option><option value="express">Express</option></select></label><label>Seuil gratuité HTG<input type="number" min="0" value={f.free_threshold} onChange={e=>setF({...f,free_threshold:e.target.value})}/></label><label>Frais supplémentaires<input type="number" min="0" value={f.extra_fee} onChange={e=>setF({...f,extra_fee:e.target.value})}/></label><label className="check-label span-2"><input type="checkbox" checked={f.active} onChange={e=>setF({...f,active:e.target.checked})}/>Zone active pour les nouvelles commandes</label>{error&&<div className="form-error span-2">{error}</div>}<div className="form-actions span-2"><button type="button" className="btn secondary" onClick={onClose}>Annuler</button><button className="btn primary" disabled={busy}>Enregistrer</button></div></form></Modal>}
 
-function Notifications({data,reload,can}:CommonProps){const[filter,setFilter]=useState('all'),[busy,setBusy]=useState(false);const rows=data.notifications.filter(n=>filter==='all'||n.status===filter);const retry=async(id:string)=>{const{error}=await supabase.rpc('admin_retry_notification',{p_notification_id:id});if(error)toast.error(error.message);else{toast.success('Notification replacée dans la file');await reload()}};const test=async()=>{setBusy(true);const{error}=await supabase.functions.invoke('whatsapp-notifications',{body:{action:'test'}});setBusy(false);if(error)toast.error(error.message);else toast.success('Flux de test exécuté sans message réel')};const failed=rows.filter(n=>n.status==='failed').length;return <><PageHead eyebrow="MESSAGERIE TRANSACTIONNELLE" title="Notifications WhatsApp" text="Suivez chaque envoi, chaque réponse Meta et chaque nouvelle tentative sans risque de doublon."><button className="btn secondary" onClick={test} disabled={busy}><Sparkles/>Tester le flux</button></PageHead><div className="warning-box top-warning"><ShieldCheck/><div><strong>Mode sécurisé</strong><p>Si les identifiants Meta ne sont pas configurés côté serveur, le test reste en simulation et aucun message réel n’est envoyé. Les secrets ne transitent jamais par le navigateur.</p></div></div><section className="mini-stats three"><div><span>ENVOYÉES</span><strong>{data.notifications.filter(n=>n.status==='sent').length}</strong></div><div><span>EN FILE</span><strong>{data.notifications.filter(n=>['pending','processing'].includes(n.status)).length}</strong></div><div><span>ÉCHECS</span><strong>{failed}</strong></div></section><section className="panel table-panel"><div className="table-toolbar"><select value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Tous les états</option><option value="pending">En attente</option><option value="sent">Envoyées</option><option value="failed">Échecs</option></select></div><div className="table-scroll"><table><thead><tr><th>Canal</th><th>Commande</th><th>Destinataire</th><th>Statut</th><th>Tentatives</th><th>Dernier essai</th><th></th></tr></thead><tbody>{rows.map(n=><tr key={n.id}><td><Badge tone="neutral">{n.channel==='whatsapp'?'WhatsApp':'E-mail'}</Badge></td><td>{n.orders?.order_number||'—'}</td><td>{n.recipient}</td><td><Badge tone={n.status==='sent'?'success':n.status==='failed'?'danger':'warning'}>{n.status==='sent'?'Envoyée':n.status==='failed'?'Échec':n.status==='pending'?'En file':'En cours'}</Badge>{n.error_code&&<small className="cell-sub text-danger">{n.error_code}</small>}</td><td>{n.attempts}</td><td>{n.last_attempt_at?dateFr(n.last_attempt_at):'—'}</td><td>{n.status==='failed'&&can('orders.write')&&<button className="text-btn" onClick={()=>retry(n.id)}><RefreshCw/>Relancer</button>}</td></tr>)}</tbody></table>{!rows.length&&<Empty icon={Bell} title="Aucune notification" text="Les messages transactionnels apparaîtront ici après les commandes et changements de statut."/>}</div></section></>}
+function Notifications({data,reload,can}:CommonProps){
+ const[filter,setFilter]=useState('all'),[busy,setBusy]=useState(false)
+ const rows=data.notifications.filter(n=>filter==='all'||n.status===filter)
+ const dispatch=async(action:'dispatch_due'|'dispatch_notification',notificationId?:string)=>{
+  setBusy(true)
+  try{
+   const{data:result,error}=await supabase.functions.invoke('order-notifications',{body:{action,limit:100,...(notificationId?{notification_id:notificationId}:{})}})
+   if(error)toast.error(`Notifications non envoyées : ${error.message}`)
+   else if(result?.ok===false)toast.error('Une ou plusieurs notifications ont échoué. Vérifiez le détail dans la liste.')
+   else toast.success(`${result?.processed||0} notification(s) traitée(s). Consultez leur statut dans la liste.`)
+   await reload()
+  }catch(error){toast.error(`Impossible de traiter les notifications : ${error instanceof Error?error.message:'erreur inconnue'}`)}
+  finally{setBusy(false)}
+ }
+ const retry=async(id:string)=>{
+  const{error}=await supabase.rpc('admin_retry_notification',{p_notification_id:id})
+  if(error){toast.error(error.message);return}
+  await dispatch('dispatch_notification',id)
+ }
+ const test=async()=>{
+  setBusy(true)
+  try{
+   const{data:result,error}=await supabase.functions.invoke('order-notifications',{body:{action:'test'}})
+   if(error)toast.error(`Contrôle de configuration impossible : ${error.message}`)
+   else toast.info(`Configuration détectée — e-mail : ${result?.email_configured?'oui':'non'} · WhatsApp : ${result?.whatsapp_configured?'oui':'non'}. Aucun message envoyé.`)
+  }catch(error){toast.error(`Contrôle impossible : ${error instanceof Error?error.message:'erreur inconnue'}`)}
+  finally{setBusy(false)}
+ }
+ const failed=data.notifications.filter(n=>n.status==='failed').length
+ return <><PageHead eyebrow="MESSAGERIE TRANSACTIONNELLE" title="Notifications e-mail et WhatsApp" text="Suivez les confirmations client et les alertes équipe, consultez les échecs et relancez un envoi."><button className="btn secondary" onClick={test} disabled={busy}><Sparkles/>Vérifier la configuration</button>{can('orders.write')&&<button className="btn primary" onClick={()=>dispatch('dispatch_due')} disabled={busy}><RefreshCw/>Traiter la file</button>}</PageHead>
+  <div className="warning-box top-warning"><ShieldCheck/><div><strong>Envoi contrôlé côté serveur</strong><p>Les e-mails nécessitent les secrets Resend et une adresse d’équipe configurée. WhatsApp exige des identifiants Meta, un modèle approuvé et le consentement du client. Le contrôle de configuration n’envoie aucun message.</p></div></div>
+  <section className="mini-stats three"><div><span>ENVOYÉES</span><strong>{data.notifications.filter(n=>n.status==='sent').length}</strong></div><div><span>EN FILE</span><strong>{data.notifications.filter(n=>['pending','processing'].includes(n.status)).length}</strong></div><div><span>ÉCHECS</span><strong>{failed}</strong></div></section>
+  <section className="panel table-panel"><div className="table-toolbar"><select value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Tous les états</option><option value="pending">En attente</option><option value="sent">Envoyées</option><option value="failed">Échecs</option></select></div><div className="table-scroll"><table><thead><tr><th>Canal</th><th>Commande</th><th>Destinataire</th><th>Statut</th><th>Tentatives</th><th>Dernier essai</th><th></th></tr></thead><tbody>{rows.map(n=><tr key={n.id}><td><Badge tone="neutral">{n.channel==='whatsapp'?'WhatsApp':'E-mail'}</Badge></td><td>{n.orders?.order_number||'—'}</td><td>{n.recipient}</td><td><Badge tone={n.status==='sent'?'success':n.status==='failed'?'danger':'warning'}>{n.status==='sent'?'Envoyée':n.status==='failed'?'Échec':n.status==='pending'?'En file':'En cours'}</Badge>{n.error_code&&<small className="cell-sub text-danger">{n.error_code}</small>}</td><td>{n.attempts}</td><td>{n.last_attempt_at?dateFr(n.last_attempt_at):'—'}</td><td>{n.status==='failed'&&can('orders.write')&&<button className="text-btn" disabled={busy} onClick={()=>retry(n.id)}><RefreshCw/>Relancer</button>}</td></tr>)}</tbody></table>{!rows.length&&<Empty icon={Bell} title="Aucune notification" text="Les messages e-mail et WhatsApp apparaîtront après les commandes et changements de statut."/>}</div></section></>
+}
 
 function Team({data,reload,can}:CommonProps){const[busy,setBusy]=useState(false);const change=async(id:string,role:string)=>{if(!window.confirm('Confirmer la modification des permissions de ce membre ?'))return;setBusy(true);const{error}=await supabase.rpc('admin_set_staff_role',{p_user_id:id,p_role:role});setBusy(false);if(error)toast.error(error.message);else{toast.success('Rôle mis à jour');await reload()}};return <><PageHead eyebrow="SÉCURITÉ" title="Équipe et permissions" text="Chaque rôle est vérifié côté serveur et appliqué par les politiques RLS Supabase."/><section className="role-grid">{[{r:'super_admin',n:'Super administrateur',d:'Accès complet et gestion des accès'},{r:'manager',n:'Gestionnaire',d:'Opérations, catalogue et commandes'},{r:'catalog_manager',n:'Catalogue',d:'Produits, prix et stocks'},{r:'order_manager',n:'Commandes',d:'Commandes et livraison'}].map(x=><article key={x.r}><ShieldCheck/><strong>{x.n}</strong><p>{x.d}</p><span>{data.staff.filter(s=>s.user_roles.some(r=>r.role===x.r)).length} membre(s)</span></article>)}</section><section className="panel table-panel"><div className="panel-head padded"><div><span className="eyebrow">MEMBRES</span><h2>Comptes de l’équipe</h2></div></div><div className="table-scroll"><table><thead><tr><th>Membre</th><th>Identifiant</th><th>État</th><th>Rôle</th><th>Depuis</th></tr></thead><tbody>{data.staff.map(s=><tr key={s.id}><td><div className="customer-cell"><span className="avatar">{s.full_name?.[0]||'B'}</span><strong>{s.full_name||'Membre BIELUMINA'}</strong></div></td><td><code>{s.id.slice(0,8)}</code></td><td><Badge tone={s.active?'success':'danger'}>{s.active?'Actif':'Révoqué'}</Badge></td><td><select disabled={busy||!can('staff.write')} value={s.user_roles[0]?.role||'viewer'} onChange={e=>change(s.id,e.target.value)}><option value="super_admin">Super administrateur</option><option value="manager">Gestionnaire</option><option value="catalog_manager">Catalogue</option><option value="order_manager">Commandes</option><option value="inventory_manager">Inventaire</option><option value="viewer">Lecture seule</option></select></td><td>{dateFr(s.created_at)}</td></tr>)}</tbody></table></div></section>{data.audit.length>0&&<section className="panel audit-panel"><div className="panel-head"><div><span className="eyebrow">TRAÇABILITÉ</span><h2>Journal des opérations sensibles</h2></div></div><div className="audit-list">{data.audit.slice(0,20).map(a=><div key={a.id}><FileClock/><span><strong>{a.action}</strong><small>{a.resource} · {a.resource_id||'global'}</small></span><time>{dateFr(a.created_at)}</time></div>)}</div></section>}</>}
 
-function SettingsPage({data,reload}:CommonProps){const store=data.settings.find(s=>s.key==='store')?.value||{};const notif=data.settings.find(s=>s.key==='notifications')?.value||{};const[storeForm,setStoreForm]=useState({name:String(store.name||'BIELUMINA'),contact_email:String(store.contact_email||''),contact_phone:String(store.contact_phone||''),whatsapp_number:String(store.whatsapp_number||''),default_currency:String(store.default_currency||'HTG')});const[whatsapp,setWhatsapp]=useState(Boolean(notif.whatsapp_enabled));const[email,setEmail]=useState(Boolean(notif.email_enabled));const[busy,setBusy]=useState(false);const save=async(e:FormEvent)=>{e.preventDefault();setBusy(true);const[a,b]=await Promise.all([supabase.from('store_settings').update({value:{...store,...storeForm},updated_at:new Date().toISOString()}).eq('key','store'),supabase.from('store_settings').update({value:{...notif,whatsapp_enabled:whatsapp,email_enabled:email},updated_at:new Date().toISOString()}).eq('key','notifications')]);setBusy(false);const error=a.error||b.error;if(error)toast.error(error.message);else{toast.success('Paramètres enregistrés');await reload()}};return <><PageHead eyebrow="CONFIGURATION" title="Paramètres généraux" text="Les informations de contact et préférences opérationnelles de votre boutique."/><form onSubmit={save} className="settings-layout"><section className="panel form-panel"><div className="panel-head"><div><span className="eyebrow">IDENTITÉ</span><h2>Coordonnées de la boutique</h2></div></div><div className="form-grid"><label>Nom de la boutique<input value={storeForm.name} onChange={e=>setStoreForm({...storeForm,name:e.target.value})}/></label><label>Devise de référence<select value={storeForm.default_currency} onChange={e=>setStoreForm({...storeForm,default_currency:e.target.value})}><option>HTG</option><option>USD</option></select></label><label>E-mail du service client<input type="email" value={storeForm.contact_email} onChange={e=>setStoreForm({...storeForm,contact_email:e.target.value})}/></label><label>Téléphone<input value={storeForm.contact_phone} onChange={e=>setStoreForm({...storeForm,contact_phone:e.target.value})}/></label><label className="span-2">Numéro WhatsApp<input value={storeForm.whatsapp_number} onChange={e=>setStoreForm({...storeForm,whatsapp_number:e.target.value})}/></label></div></section><section className="panel form-panel"><div className="panel-head"><div><span className="eyebrow">NOTIFICATIONS</span><h2>Canaux transactionnels</h2></div></div><label className="switch-row"><span><strong>Notifications WhatsApp</strong><small>Confirmation et changements de statut</small></span><input type="checkbox" checked={whatsapp} onChange={e=>setWhatsapp(e.target.checked)}/></label><label className="switch-row"><span><strong>Secours par e-mail</strong><small>Utilisé si configuré côté serveur</small></span><input type="checkbox" checked={email} onChange={e=>setEmail(e.target.checked)}/></label><div className="info-box"><ShieldCheck/><p>Les jetons Meta et les secrets de messagerie se configurent exclusivement dans les variables d’environnement de la fonction serveur.</p></div></section><div className="settings-save"><button className="btn primary" disabled={busy}>{busy?<Loader2 className="spin"/>:<Check/>}Enregistrer les paramètres</button></div></form></>}
+function SettingsPage({data,reload}:CommonProps){
+ const store=useMemo(()=>data.settings.find(s=>s.key==='store')?.value||{},[data.settings])
+ const notif=useMemo(()=>data.settings.find(s=>s.key==='notifications')?.value||{},[data.settings])
+ const[storeForm,setStoreForm]=useState({name:String(store.name||'BIELUMINA'),contact_email:String(store.contact_email||''),contact_phone:String(store.contact_phone||''),whatsapp_number:String(store.whatsapp_number||''),default_currency:String(store.default_currency||'HTG')})
+ const[whatsapp,setWhatsapp]=useState(Boolean(notif.whatsapp_enabled)),[email,setEmail]=useState(Boolean(notif.email_enabled))
+ const[adminEmail,setAdminEmail]=useState(''),[adminWhatsapp,setAdminWhatsapp]=useState(''),[notificationSettingsLoaded,setNotificationSettingsLoaded]=useState(false),[busy,setBusy]=useState(false)
+ useEffect(()=>{setStoreForm({name:String(store.name||'BIELUMINA'),contact_email:String(store.contact_email||''),contact_phone:String(store.contact_phone||''),whatsapp_number:String(store.whatsapp_number||''),default_currency:String(store.default_currency||'HTG')})},[store])
+ useEffect(()=>{setWhatsapp(Boolean(notif.whatsapp_enabled));setEmail(Boolean(notif.email_enabled))},[notif])
+ useEffect(()=>{let active=true;supabase.from('notification_settings').select('admin_email,admin_whatsapp').eq('id',true).maybeSingle().then(({data,error})=>{if(!active)return;if(error){toast.error(`Configuration des notifications inaccessible : ${error.message}`);return}setAdminEmail(String(data?.admin_email||''));setAdminWhatsapp(String(data?.admin_whatsapp||''));setNotificationSettingsLoaded(true)});return()=>{active=false}},[])
+ const save=async(e:FormEvent)=>{
+  e.preventDefault();setBusy(true)
+  try{
+   const[a,b,c]=await Promise.all([
+    supabase.from('store_settings').update({value:{...store,...storeForm},updated_at:new Date().toISOString()}).eq('key','store'),
+    supabase.from('store_settings').update({value:{...notif,whatsapp_enabled:whatsapp,email_enabled:email},updated_at:new Date().toISOString()}).eq('key','notifications'),
+    supabase.from('notification_settings').update({admin_email:adminEmail.trim(),admin_whatsapp:adminWhatsapp.trim(),updated_at:new Date().toISOString()}).eq('id',true),
+   ])
+   const error=a.error||b.error||c.error
+   if(error)toast.error(`Paramètres non enregistrés : ${error.message}`)
+   else{toast.success('Paramètres enregistrés');await reload()}
+  }catch(error){toast.error(`Enregistrement impossible : ${error instanceof Error?error.message:'erreur inconnue'}`)}
+  finally{setBusy(false)}
+ }
+ return <><PageHead eyebrow="CONFIGURATION" title="Paramètres généraux" text="Coordonnées et préférences opérationnelles de la boutique."/><form onSubmit={save} className="settings-layout">
+  <section className="panel form-panel"><div className="panel-head"><div><span className="eyebrow">IDENTITÉ</span><h2>Coordonnées de la boutique</h2></div></div><div className="form-grid"><label>Nom de la boutique<input value={storeForm.name} onChange={e=>setStoreForm({...storeForm,name:e.target.value})}/></label><label>Devise de référence<select value={storeForm.default_currency} onChange={e=>setStoreForm({...storeForm,default_currency:e.target.value})}><option>HTG</option><option>USD</option></select></label><label>E-mail du service client<input type="email" value={storeForm.contact_email} onChange={e=>setStoreForm({...storeForm,contact_email:e.target.value})}/></label><label>Téléphone<input value={storeForm.contact_phone} onChange={e=>setStoreForm({...storeForm,contact_phone:e.target.value})}/></label><label className="span-2">Numéro WhatsApp public<input value={storeForm.whatsapp_number} onChange={e=>setStoreForm({...storeForm,whatsapp_number:e.target.value})}/></label></div></section>
+  <section className="panel form-panel"><div className="panel-head"><div><span className="eyebrow">NOTIFICATIONS</span><h2>Canaux transactionnels</h2></div></div>
+   <label className="field"><span>E-mail privé de réception des commandes</span><input type="email" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} placeholder="equipe@votre-domaine.com"/></label>
+   <label className="field"><span>WhatsApp privé de l’équipe (facultatif)</span><input type="tel" value={adminWhatsapp} onChange={e=>setAdminWhatsapp(e.target.value)} placeholder="+509…"/></label>
+   <label className="switch-row"><span><strong>Notifications WhatsApp</strong><small>Le client doit donner son accord au checkout.</small></span><input type="checkbox" checked={whatsapp} onChange={e=>setWhatsapp(e.target.checked)}/></label>
+   <label className="switch-row"><span><strong>Notifications par e-mail</strong><small>Confirmation au client et alerte à l’équipe si les adresses sont configurées.</small></span><input type="checkbox" checked={email} onChange={e=>setEmail(e.target.checked)}/></label>
+   <div className="info-box"><ShieldCheck/><p>Les secrets Resend et Meta restent dans Supabase Edge Function Secrets. Configurez-les avant d’activer l’envoi réel.</p></div>
+  </section><div className="settings-save"><button className="btn primary" disabled={busy||!notificationSettingsLoaded}>{busy?<Loader2 className="spin"/>:<Check/>}Enregistrer les paramètres</button></div>
+ </form></>
+}
 
 export default App

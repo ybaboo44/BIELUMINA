@@ -48,11 +48,11 @@ values ('UUID-DE-L-UTILISATEUR', 'super_admin');
 
 ## Notifications
 
-L’état livré ne prétend aucun envoi automatique : les identifiants fournisseurs ne sont pas configurés.
-
-- La file `notifications` et les tentatives sont prêtes.
-- Le canal e-mail est désactivé par défaut. Configurer l’adresse vendeur dans `store_settings`, puis un fournisseur transactionnel et un worker Supabase Edge Function avec reprise exponentielle.
-- WhatsApp doit rester en mode manuel jusqu’à la configuration de l’API WhatsApp Business et de ses modèles approuvés. Ne jamais marquer un message comme envoyé à la simple ouverture de `wa.me`.
+- La migration `202610240008_order_notification_delivery.sql` met en file les confirmations et les changements de statut pour le client et l’équipe.
+- Pour recevoir un e-mail, configurez l’adresse privée de l’équipe dans `/admin` → Paramètres, fournissez une adresse e-mail au checkout, puis ajoutez les secrets serveur `RESEND_API_KEY` et `EMAIL_FROM`.
+- Pour WhatsApp, le client doit donner son accord au checkout ; l’équipe peut configurer un numéro privé dans `/admin` → Paramètres. Les identifiants Meta et les modèles approuvés restent requis.
+- Déployez `order-notifications` et planifiez son appel pour traiter les reprises. Les erreurs fournisseur sont visibles dans l’administration ; aucun succès n’est affiché avant confirmation du fournisseur.
+- Les secrets d’e-mail et Meta ne vont jamais dans le navigateur ou dans une variable `VITE_*`. Suivre [DEPLOY.md](./DEPLOY.md) et [docs/WHATSAPP_SETUP.md](./docs/WHATSAPP_SETUP.md).
 
 ## Déploiement Vercel
 
@@ -78,7 +78,7 @@ Suivre [DEPLOY.md](./DEPLOY.md) pour importer le dépôt, configurer `VITE_SUPAB
 
 ## Limites explicites du socle
 
-L’import/export CSV, l’édition complète des fiches avec images multiples, les invitations depuis l’UI, les workers d’envoi, les rapports graphiques avancés et la suite E2E complète restent à réaliser avant de qualifier la plateforme de production complète. Les fonctions présentes dans l’interface sont connectées ; aucune intégration externe non configurée n’est simulée.
+L’import/export CSV complet, les invitations depuis l’UI, les rapports graphiques avancés et la suite E2E complète restent à réaliser avant de qualifier la plateforme de production complète. Le worker de notification est inclus, mais il n’enverra rien tant que les fonctions, fournisseurs, secrets et destinataires ne sont pas configurés en production.
 
 
 ---
@@ -88,9 +88,9 @@ L’import/export CSV, l’édition complète des fiches avec images multiples, 
 - `/admin` : dashboard d'administration complet intégré (9 modules : vue d'ensemble, produits avec photos multiples, commandes, tarifs/taux, livraison, clients, notifications WhatsApp, équipe et rôles, paramètres). Authentification Supabase, permissions RLS.
 - Page d'accueil : carrousels produits (sélection, nouveautés) ; fiche produit : galerie multi-photos avec miniatures.
 - Checkout : choix du mode de paiement + consentement WhatsApp explicite.
-- Migrations : `001`–`003` (BIELUMINA) puis `00400`–`00600` (dashboard) puis `202610240007` (rôle payment_manager, statuts de vérification des paiements, table whatsapp_inbound, trigger de notification paiement, extension rétrocompatible de `create_order`).
-- Edge Functions : `whatsapp-notifications` (envoi via file, anti-doublon, backoff, **mode simulation** sans identifiants Meta) et `whatsapp-webhook` (vérification HMAC-SHA256, statuts de livraison, journalisation des messages entrants — jamais de confirmation automatique de paiement).
-- Sans identifiants Meta : aucun message réel n'est envoyé (tout est tracé en `simulation`).
+- Migrations : `001`–`003` (BIELUMINA) puis `00400`–`00600` (dashboard), `202610240007` (rôle payment_manager, statuts de vérification, WhatsApp entrant et extension de `create_order`) et `202610240008` (file de notifications e-mail/WhatsApp et destinataire privé de l’équipe).
+- Edge Functions : `order-notifications` (envoi Resend/Meta via file, contrôle d’accès, anti-doublon et reprise) et `whatsapp-webhook` (vérification HMAC-SHA256, statuts de livraison, journalisation des messages entrants — jamais de confirmation automatique de paiement).
+- Sans identifiants Meta ou Resend : aucun message réel n'est envoyé ; l’échec est enregistré dans la file et visible depuis `/admin`.
 
 ### Lancement
 ```bash
@@ -99,5 +99,5 @@ npm install
 npm run test && npm run lint && npm run build && npm run dev
 ```
 ### Base de données et WhatsApp
-`supabase link && supabase db push` puis `supabase functions deploy whatsapp-notifications whatsapp-webhook`
+Appliquer d’abord les migrations en ordre avec `supabase link` puis `supabase db push`. Déployer ensuite `supabase functions deploy order-notifications --no-verify-jwt` et `supabase functions deploy whatsapp-webhook`.
 — voir **DEPLOY.md** et **docs/WHATSAPP_SETUP.md** (création app Meta, modèles à approuver, webhook, cron).
