@@ -23,7 +23,7 @@ export function ConfirmationPage() {
         {order.shipping_fee !== undefined && <div><span>Livraison</span><strong>{money(order.shipping_fee, order.currency)}</strong></div>}
         <div className="grand-total"><span>Total de la commande</span><strong>{money(order.total, order.currency)}</strong></div>
         {order.payment_method && <div><span>Mode de paiement</span><strong>{paymentMethodLabels[order.payment_method] || order.payment_method}</strong></div>}
-        {order.payment_provider && <div><span>Service de dépôt</span><strong>{order.payment_provider==='moncash'?'MonCash':'Natcom'}</strong></div>}
+        {order.payment_provider && <div><span>Service de dépôt</span><strong>{order.payment_provider==='moncash'?'MonCash':'NatCash'}</strong></div>}
         {order.payment_txn_id && <div><span>Txn ID transmis</span><strong>{order.payment_txn_id}</strong></div>}
         {order.payment_depositor_phone && <div><span>Téléphone du déposant</span><strong>{order.payment_depositor_phone}</strong></div>}
         {order.payment_status && <div><span>Statut du paiement</span><strong>{paymentStatusLabels[order.payment_status] || order.payment_status}</strong></div>}

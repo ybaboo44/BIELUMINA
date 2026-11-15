@@ -36,7 +36,9 @@ begin
   if p_payment_provider is null or p_payment_provider not in ('moncash', 'natcom') then
     raise exception 'INVALID_PAYMENT_PROVIDER';
   end if;
-  if p_payment_txn_id is null or trim(p_payment_txn_id) !~ '^[0-9]{12}$' then
+  if p_payment_txn_id is null
+     or (p_payment_provider = 'moncash' and trim(p_payment_txn_id) !~ '^[0-9]{12}$')
+     or (p_payment_provider = 'natcom' and trim(p_payment_txn_id) !~ '^[0-9]{14}$') then
     raise exception 'INVALID_PAYMENT_TXN_ID';
   end if;
   if p_payment_depositor_phone is null
